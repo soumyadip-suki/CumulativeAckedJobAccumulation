@@ -58,5 +58,5 @@ func (c *Client) ConsumeAndProcess() {
 }
 
 func backOff(backoff int) {
-	time.Sleep(time.Duration(backoff*100) * time.Microsecond)
+	time.Sleep(time.Duration(backoff/100) * time.Millisecond)
 }

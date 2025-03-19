@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from queue import Queue
 from threading import Lock, Thread, Condition
 from typing import Optional
-
-@dataclass
+import sys
+@dataclass(frozen=True)
 class Job:
     id: int
 
@@ -50,7 +50,7 @@ class Aggregator:
         
     def try_add_job(self, job: Job) -> tuple[int, Optional[str]]:
         with self.lock:
-            if job.id == -100:
+            if job.id == -100: # Sentinel value to flush results
                 self.result_queue.put(None)
                 return 0, None
             if job.id == self.last_id + 1:
@@ -65,7 +65,7 @@ class Aggregator:
             job = self.result_queue.get()  # Blocking call
             if job is None:
                 break
-        print(f"Flushed {self.last_id} jobs")
+        print(f"Flushed all jobs")
 
 class Producer:
     def __init__(self, limit: int):
@@ -81,12 +81,14 @@ class Producer:
             job = Job(id=self.id_generator.generate())
             self.job_queue.put(job)
         self.job_queue.put(None)  # Sentinel value
-        print(f"Time taken to produce: {time.time() - start_time:.2f} seconds")
+        print(f"Time taken to produce: {time.time() - start_time:.3f} seconds")
 
 def process_jobs(job_queue: Queue, aggregator: Aggregator, executor: Executor, needs_backoff: bool):
     active_threads = 0
     thread_lock = Lock()
     thread_done = Condition(thread_lock)
+    contention_count = 0
+    contention_lock = Lock()
     print("started processing jobs")
     while True:
         job = job_queue.get()
@@ -94,15 +96,17 @@ def process_jobs(job_queue: Queue, aggregator: Aggregator, executor: Executor, n
             break
             
         def process_single_job():
-            nonlocal active_threads
+            nonlocal active_threads, contention_count
             try:
                 processed_job = executor.execute_job(job)
                 while True:
                     backoff, error = aggregator.try_add_job(processed_job)
                     if error is None:
                         break
+                    with contention_lock:
+                            contention_count += 1
                     if needs_backoff:
-                        time.sleep(backoff * 0.0001)  # Convert to similar backoff as Go version
+                        time.sleep(backoff * 0.01)
             finally:
                 with thread_lock:
                     active_threads -= 1
@@ -123,10 +127,11 @@ def process_jobs(job_queue: Queue, aggregator: Aggregator, executor: Executor, n
     # Signal completion to aggregator
     aggregator.try_add_job(Job(id=-100))
     print("all jobs processed")
+    print(f"---------------------------------- Contention count: {contention_count}")
 
 def main():
 
-    num_jobs = 100
+    num_jobs = int(sys.argv[1]) if len(sys.argv) > 1 else 100
     print(f"Number of jobs: {num_jobs}")
     
     # Initialize components
